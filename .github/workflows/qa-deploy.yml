@@ -2,19 +2,18 @@ name: QA Deploy
 
 on:
   schedule:
-    - cron: '0 9 * * *' # Runs daily at 2AM PDT
+    - cron: '0 9 * * *'  # Runs daily at 2AM PDT
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
-  detect-and-deploy:
+  detect-and-test:
     runs-on: ubuntu-latest
     env:
-      ECR_REGISTRY: 949882743811.dkr.ecr.us-east-1.amazonaws.com
-      CLUSTER_NAME: final-devops-cluster
       AWS_REGION: us-east-1
-      EKS_NAMESPACE: qa
+      ECR_REGISTRY: 949882743811.dkr.ecr.us-east-1.amazonaws.com
 
     steps:
     - name: Checkout code
@@ -22,14 +21,13 @@ jobs:
 
     - name: Extract commit message
       id: commit
-      run: |
-        echo "msg=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
+      run: echo "msg=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
 
-    - name: Determine target service
+    - name: Detect service change
       id: detect
       run: |
         msg="${{ steps.commit.outputs.msg }}"
-        echo "Detected commit: $msg"
+        echo "Commit Message: $msg"
         if [[ "$msg" == user-service:* ]]; then
           echo "service=user-service" >> $GITHUB_OUTPUT
           echo "port=3001" >> $GITHUB_OUTPUT
@@ -43,11 +41,11 @@ jobs:
           echo "service=frontend" >> $GITHUB_OUTPUT
           echo "port=5173" >> $GITHUB_OUTPUT
         else
-          echo "❌ No deployable service found in commit message."
-          exit 0
+          echo "❌ No target service detected. Skipping."
+          exit 78  # GitHub neutral skip
         fi
 
-    - name: Configure AWS credentials
+    - name: Set up AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -55,27 +53,25 @@ jobs:
         aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
         aws-region: ${{ env.AWS_REGION }}
 
-    - name: Login to Amazon ECR
+    - name: Login to ECR
       run: |
         aws ecr get-login-password --region $AWS_REGION | \
-          docker login --username AWS --password-stdin $ECR_REGISTRY
+        docker login --username AWS --password-stdin $ECR_REGISTRY
 
-    - name: Build and Push Docker image to ECR
+    - name: Build and push Docker image to ECR
       run: |
         SERVICE=${{ steps.detect.outputs.service }}
-        TAG=qa-$(date +%Y%m%d%H%M%S)
-        IMAGE="$ECR_REGISTRY/$SERVICE:$TAG"
-        echo "Building and pushing $IMAGE"
-
+        IMAGE="$ECR_REGISTRY/$SERVICE:qa-latest"
+        echo "📦 Building image for $SERVICE"
         docker build -t $IMAGE --platform linux/amd64 ./$SERVICE
         docker push $IMAGE
-
         echo "IMAGE=$IMAGE" >> $GITHUB_ENV
-        echo "TAG=$TAG" >> $GITHUB_ENV
 
-    - name: Update image in EKS
+    - name: Simulate Smoke Test via curl on EC2 (fake)
       run: |
-        aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
-        kubectl set image deployment/${{ steps.detect.outputs.service }} \
-          ${{ steps.detect.outputs.service }}=$IMAGE \
-          -n $EKS_NAMESPACE
+        echo "🔍 Pretending to SSH into a QA EC2..."
+        echo "curl http://fake-qa-ec2/$SERVICE/health"
+        echo "✅ $SERVICE QA smoke test simulated successfully."
+
+    - name: ✅ Done
+      run: echo "$SERVICE successfully built and fake-tested."
