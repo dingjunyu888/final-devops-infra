@@ -1,17 +1,18 @@
 name: QA Deploy
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '0 9 * * *'  # 2 AM PDT
+    - cron: '0 9 * * *' # 2AM PDT every day
+  workflow_dispatch:
+  push:
+    branches: [main]
 
 jobs:
-  detect-and-build:
+  detect-and-deploy:
     runs-on: ubuntu-latest
     env:
       ECR_REGISTRY: 949882743811.dkr.ecr.us-east-1.amazonaws.com
       AWS_REGION: us-east-1
-      SOURCE_REPO: dingjunyu888/final-devops-project
 
     steps:
     - name: Checkout infra repo
@@ -20,30 +21,38 @@ jobs:
     - name: Checkout source repo
       uses: actions/checkout@v3
       with:
-        repository: ${{ env.SOURCE_REPO }}
+        repository: dingjunyu888/final-devops-project
         token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
         path: source
 
-    - name: Detect changed service
-      id: detect
-      working-directory: source
+    - name: Extract commit message from source repo
+      id: commit
       run: |
-        git fetch origin main
-        git diff --name-only origin/main HEAD > changed.txt || true
-        cat changed.txt
+        cd source
+        echo "msg=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
 
-        if grep -q '^backend/user-service/' changed.txt; then
+    - name: Detect which service changed
+      id: detect
+      run: |
+        msg="${{ steps.commit.outputs.msg }}"
+        echo "Detected commit: $msg"
+
+        if [[ "$msg" == user-service:* ]]; then
           echo "service=user-service" >> $GITHUB_OUTPUT
-          echo "path=backend/user-service" >> $GITHUB_OUTPUT
-        elif grep -q '^backend/product-service/' changed.txt; then
+          echo "port=3001" >> $GITHUB_OUTPUT
+          echo "context=source/backend/user-service" >> $GITHUB_OUTPUT
+        elif [[ "$msg" == product-service:* ]]; then
           echo "service=product-service" >> $GITHUB_OUTPUT
-          echo "path=backend/product-service" >> $GITHUB_OUTPUT
-        elif grep -q '^backend/order-service/' changed.txt; then
+          echo "port=3002" >> $GITHUB_OUTPUT
+          echo "context=source/backend/product-service" >> $GITHUB_OUTPUT
+        elif [[ "$msg" == order-service:* ]]; then
           echo "service=order-service" >> $GITHUB_OUTPUT
-          echo "path=backend/order-service" >> $GITHUB_OUTPUT
-        elif grep -q '^frontend/' changed.txt; then
+          echo "port=3003" >> $GITHUB_OUTPUT
+          echo "context=source/backend/order-service" >> $GITHUB_OUTPUT
+        elif [[ "$msg" == frontend:* ]]; then
           echo "service=frontend" >> $GITHUB_OUTPUT
-          echo "path=frontend" >> $GITHUB_OUTPUT
+          echo "port=5173" >> $GITHUB_OUTPUT
+          echo "context=source/frontend" >> $GITHUB_OUTPUT
         else
           echo "❌ No target service detected. Skipping."
           exit 78
@@ -62,12 +71,12 @@ jobs:
         aws ecr get-login-password --region $AWS_REGION | \
           docker login --username AWS --password-stdin $ECR_REGISTRY
 
-    - name: Build and Push Docker image
+    - name: Build and push image to ECR (qa-latest)
       run: |
         SERVICE=${{ steps.detect.outputs.service }}
-        PATH_TO_SERVICE=${{ steps.detect.outputs.path }}
-        IMAGE="$ECR_REGISTRY/$SERVICE:qa-latest"
+        CONTEXT=${{ steps.detect.outputs.context }}
+        IMAGE=$ECR_REGISTRY/$SERVICE:qa-latest
 
-        echo "📦 Building $SERVICE from $PATH_TO_SERVICE"
-        docker build -t $IMAGE --platform linux/amd64 ./source/$PATH_TO_SERVICE
+        echo "📦 Building and pushing $IMAGE from $CONTEXT"
+        docker build -t $IMAGE --platform linux/amd64 $CONTEXT
         docker push $IMAGE
