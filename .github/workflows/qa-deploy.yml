@@ -1,0 +1,81 @@
+name: QA Deploy
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # Runs daily at 2AM PDT
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  detect-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      ECR_REGISTRY: 949882743811.dkr.ecr.us-east-1.amazonaws.com
+      CLUSTER_NAME: final-devops-cluster
+      AWS_REGION: us-east-1
+      EKS_NAMESPACE: qa
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Extract commit message
+      id: commit
+      run: |
+        echo "msg=$(git log -1 --pretty=%B)" >> $GITHUB_OUTPUT
+
+    - name: Determine target service
+      id: detect
+      run: |
+        msg="${{ steps.commit.outputs.msg }}"
+        echo "Detected commit: $msg"
+        if [[ "$msg" == user-service:* ]]; then
+          echo "service=user-service" >> $GITHUB_OUTPUT
+          echo "port=3001" >> $GITHUB_OUTPUT
+        elif [[ "$msg" == product-service:* ]]; then
+          echo "service=product-service" >> $GITHUB_OUTPUT
+          echo "port=3002" >> $GITHUB_OUTPUT
+        elif [[ "$msg" == order-service:* ]]; then
+          echo "service=order-service" >> $GITHUB_OUTPUT
+          echo "port=3003" >> $GITHUB_OUTPUT
+        elif [[ "$msg" == frontend:* ]]; then
+          echo "service=frontend" >> $GITHUB_OUTPUT
+          echo "port=5173" >> $GITHUB_OUTPUT
+        else
+          echo "❌ No deployable service found in commit message."
+          exit 0
+        fi
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      run: |
+        aws ecr get-login-password --region $AWS_REGION | \
+          docker login --username AWS --password-stdin $ECR_REGISTRY
+
+    - name: Build and Push Docker image to ECR
+      run: |
+        SERVICE=${{ steps.detect.outputs.service }}
+        TAG=qa-$(date +%Y%m%d%H%M%S)
+        IMAGE="$ECR_REGISTRY/$SERVICE:$TAG"
+        echo "Building and pushing $IMAGE"
+
+        docker build -t $IMAGE --platform linux/amd64 ./$SERVICE
+        docker push $IMAGE
+
+        echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+        echo "TAG=$TAG" >> $GITHUB_ENV
+
+    - name: Update image in EKS
+      run: |
+        aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+        kubectl set image deployment/${{ steps.detect.outputs.service }} \
+          ${{ steps.detect.outputs.service }}=$IMAGE \
+          -n $EKS_NAMESPACE
