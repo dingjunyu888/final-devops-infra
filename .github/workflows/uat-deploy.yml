@@ -23,30 +23,32 @@ jobs:
         token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
         path: source
 
-    - name: Parse release title
+    - name: Parse release tag
       id: parse
       run: |
-        TITLE="${{ github.event.client_payload.release_title }}"
-        echo "Release title: $TITLE"
-        
-        if [[ "$TITLE" =~ ^user-service-rc-.*$ ]]; then
+        TAG="${{ github.event.client_payload.tag }}"
+        echo "Tag: $TAG"
+
+        if [[ "$TAG" =~ ^user-service-rc-v.*$ ]]; then
           echo "service=user-service" >> $GITHUB_OUTPUT
           echo "context=source/backend/user-service" >> $GITHUB_OUTPUT
-        elif [[ "$TITLE" =~ ^product-service-rc-.*$ ]]; then
+        elif [[ "$TAG" =~ ^product-service-rc-v.*$ ]]; then
           echo "service=product-service" >> $GITHUB_OUTPUT
           echo "context=source/backend/product-service" >> $GITHUB_OUTPUT
-        elif [[ "$TITLE" =~ ^order-service-rc-.*$ ]]; then
+        elif [[ "$TAG" =~ ^order-service-rc-v.*$ ]]; then
           echo "service=order-service" >> $GITHUB_OUTPUT
           echo "context=source/backend/order-service" >> $GITHUB_OUTPUT
-        elif [[ "$TITLE" =~ ^frontend-rc-.*$ ]]; then
+        elif [[ "$TAG" =~ ^frontend-rc-v.*$ ]]; then
           echo "service=frontend" >> $GITHUB_OUTPUT
           echo "context=source/frontend" >> $GITHUB_OUTPUT
         else
-          echo "❌ Unknown or missing service in release title."
+          echo "❌ Unknown or missing service in tag."
           exit 78
         fi
 
-        echo "tag=$TITLE" >> $GITHUB_OUTPUT
+        CLEAN_TAG=$(echo $TAG | sed -E 's/^[^-]+-//')  # remove prefix before first '-'
+        echo "tag=$CLEAN_TAG" >> $GITHUB_OUTPUT
+
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
