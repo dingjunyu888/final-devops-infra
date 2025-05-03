@@ -46,7 +46,9 @@ jobs:
           exit 78
         fi
 
-        echo "tag=$TITLE" >> $GITHUB_OUTPUT
+        TAG=$(echo "$TITLE" | cut -d'-' -f3-)
+        echo "Extracted tag: $TAG"
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
