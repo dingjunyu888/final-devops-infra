@@ -11,6 +11,8 @@ jobs:
     env:
       ECR_REGISTRY: 949882743811.dkr.ecr.us-east-1.amazonaws.com
       AWS_REGION: us-east-1
+      CLUSTER_NAME: final-devops-cluster
+      NAMESPACE: uat
 
     steps:
     - name: Checkout infra repo
@@ -77,23 +79,34 @@ jobs:
         docker build -t $IMAGE --platform linux/amd64 $CONTEXT
         docker push $IMAGE
 
-    - name: Update image in EKS (UAT)
+    - name: Deploy image to EKS (UAT namespace)
       run: |
-        aws eks update-kubeconfig --region $AWS_REGION --name final-devops-cluster
+        aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
 
         SERVICE=${{ steps.parse.outputs.service }}
         TAG=${{ steps.parse.outputs.tag }}
         IMAGE=$ECR_REGISTRY/$SERVICE:$TAG
 
-        # Create the uat namespace if it doesn't exist
-        kubectl get ns uat || kubectl create namespace uat
+        echo "📦 Updating $SERVICE deployment in $NAMESPACE to image: $IMAGE"
+        kubectl set image deployment/$SERVICE $SERVICE=$IMAGE -n $NAMESPACE
 
-        # Copy deployment from qa to uat if it doesn't exist
-        if ! kubectl get deployment $SERVICE -n uat; then
-          echo "🔄 Copying $SERVICE deployment from qa to uat..."
-          kubectl get deployment $SERVICE -n qa -o yaml | \
-            sed 's/namespace: qa/namespace: uat/' | kubectl apply -f -
+    - name: Ensure service exists in UAT namespace
+      run: |
+        SERVICE=${{ steps.parse.outputs.service }}
+        echo "🔍 Checking if $SERVICE service exists in UAT..."
+
+        if ! kubectl get svc $SERVICE -n $NAMESPACE >/dev/null 2>&1; then
+          echo "⚠️ Service $SERVICE not found in UAT. Copying from QA..."
+          kubectl get svc $SERVICE -n qa -o yaml | \
+            sed 's/namespace: qa/namespace: uat/' | \
+            kubectl apply -f -
+        else
+          echo "✅ Service $SERVICE already exists in UAT."
         fi
 
-        echo "📦 Updating $SERVICE deployment in UAT to image: $IMAGE"
-        kubectl set image deployment/$SERVICE $SERVICE=$IMAGE -n uat
+    - name: Get External IP of Deployed Service
+      run: |
+        SERVICE=${{ steps.parse.outputs.service }}
+        echo "🌐 Fetching external IP for service: $SERVICE"
+        IP=$(kubectl get svc $SERVICE -n $NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        echo "✅ $SERVICE is available at: http://$IP"
