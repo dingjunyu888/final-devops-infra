@@ -87,4 +87,4 @@ jobs:
         IMAGE=$ECR_REGISTRY/$SERVICE:$TAG
 
         echo "📦 Updating $SERVICE deployment in UAT to image: $IMAGE"
-        kubectl set image deployment/$SERVICE $SERVICE=$IMAGE -n uat
+        kubectl set image deployment/$SERVICE $SERVICE=$IMAGE -n qa
