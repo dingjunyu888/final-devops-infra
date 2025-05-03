@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-service
+  namespace: uat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: product-service
+  template:
+    metadata:
+      labels:
+        app: product-service
+    spec:
+      containers:
+      - name: product-service
+        image: 949882743811.dkr.ecr.us-east-1.amazonaws.com/product-service:qa-v1
+        ports:
+        - containerPort: 3002
+        env:
+        - name: DB_HOST
+          value: "ecommerce-db.cu7l9seahjyg.us-east-1.rds.amazonaws.com"
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: product-db-secret
+              key: password
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-service
+  namespace: uat
+spec:
+  selector:
+    app: product-service
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3002
+  type: LoadBalancer
