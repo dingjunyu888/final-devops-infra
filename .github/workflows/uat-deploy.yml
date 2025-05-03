@@ -28,27 +28,31 @@ jobs:
       run: |
         TITLE="${{ github.event.client_payload.release_title }}"
         echo "Release title: $TITLE"
-        
+
         if [[ "$TITLE" =~ ^user-service-rc-.*$ ]]; then
           echo "service=user-service" >> $GITHUB_OUTPUT
           echo "context=source/backend/user-service" >> $GITHUB_OUTPUT
+          TAG=$(echo "$TITLE" | cut -d'-' -f3-)
         elif [[ "$TITLE" =~ ^product-service-rc-.*$ ]]; then
           echo "service=product-service" >> $GITHUB_OUTPUT
           echo "context=source/backend/product-service" >> $GITHUB_OUTPUT
+          TAG=$(echo "$TITLE" | cut -d'-' -f3-)
         elif [[ "$TITLE" =~ ^order-service-rc-.*$ ]]; then
           echo "service=order-service" >> $GITHUB_OUTPUT
           echo "context=source/backend/order-service" >> $GITHUB_OUTPUT
+          TAG=$(echo "$TITLE" | cut -d'-' -f3-)
         elif [[ "$TITLE" =~ ^frontend-rc-.*$ ]]; then
           echo "service=frontend" >> $GITHUB_OUTPUT
           echo "context=source/frontend" >> $GITHUB_OUTPUT
+          TAG=$(echo "$TITLE" | cut -d'-' -f2-)
         else
           echo "❌ Unknown or missing service in release title."
           exit 78
         fi
 
-        TAG=$(echo "$TITLE" | cut -d'-' -f3-)
         echo "Extracted tag: $TAG"
         echo "tag=$TAG" >> $GITHUB_OUTPUT
+
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
