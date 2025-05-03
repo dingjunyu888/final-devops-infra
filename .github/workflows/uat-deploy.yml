@@ -1,0 +1,76 @@
+name: UAT Deploy
+
+on:
+  repository_dispatch:
+    types: [trigger-uat-deploy]
+  workflow_dispatch:
+
+jobs:
+  deploy-to-uat:
+    runs-on: ubuntu-latest
+    env:
+      ECR_REGISTRY: 949882743811.dkr.ecr.us-east-1.amazonaws.com
+      AWS_REGION: us-east-1
+
+    steps:
+    - name: Checkout infra repo
+      uses: actions/checkout@v3
+
+    - name: Checkout source repo
+      uses: actions/checkout@v3
+      with:
+        repository: dingjunyu888/final-devops-project
+        token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+        path: source
+
+    - name: Parse release title
+      id: parse
+      run: |
+        TITLE="${{ github.event.client_payload.release_title }}"
+        echo "Release title: $TITLE"
+        if [[ "$TITLE" =~ ^user-service:\ rc-.*$ ]]; then
+          echo "service=user-service" >> $GITHUB_OUTPUT
+          echo "context=source/backend/user-service" >> $GITHUB_OUTPUT
+        elif [[ "$TITLE" =~ ^product-service:\ rc-.*$ ]]; then
+          echo "service=product-service" >> $GITHUB_OUTPUT
+          echo "context=source/backend/product-service" >> $GITHUB_OUTPUT
+        elif [[ "$TITLE" =~ ^order-service:\ rc-.*$ ]]; then
+          echo "service=order-service" >> $GITHUB_OUTPUT
+          echo "context=source/backend/order-service" >> $GITHUB_OUTPUT
+        elif [[ "$TITLE" =~ ^frontend:\ rc-.*$ ]]; then
+          echo "service=frontend" >> $GITHUB_OUTPUT
+          echo "context=source/frontend" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Unknown or missing service in release title."
+          exit 78
+        fi
+        echo "tag=$(echo $TITLE | awk -F': ' '{print $2}')" >> $GITHUB_OUTPUT
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      run: |
+        aws ecr get-login-password --region $AWS_REGION | \
+        docker login --username AWS --password-stdin $ECR_REGISTRY
+
+    - name: Build and push Docker image with release tag
+      run: |
+        SERVICE=${{ steps.parse.outputs.service }}
+        CONTEXT=${{ steps.parse.outputs.context }}
+        TAG=${{ steps.parse.outputs.tag }}
+        IMAGE=$ECR_REGISTRY/$SERVICE:$TAG
+
+        echo "📦 Building and pushing $IMAGE"
+        docker build -t $IMAGE --platform linux/amd64 $CONTEXT
+        docker push $IMAGE
+
+    - name: Simulate UAT Deployment to EC2
+      run: |
+        echo "🚀 Simulating deployment of $SERVICE to UAT environment with tag $TAG"
+        echo "✅ UAT deployment complete"
