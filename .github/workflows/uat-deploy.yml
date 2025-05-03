@@ -53,7 +53,6 @@ jobs:
         echo "Extracted tag: $TAG"
         echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
       with:
@@ -78,13 +77,23 @@ jobs:
         docker build -t $IMAGE --platform linux/amd64 $CONTEXT
         docker push $IMAGE
 
-    - name: Deploy image to EKS (UAT namespace)
+    - name: Update image in EKS (UAT)
       run: |
         aws eks update-kubeconfig --region $AWS_REGION --name final-devops-cluster
 
         SERVICE=${{ steps.parse.outputs.service }}
         TAG=${{ steps.parse.outputs.tag }}
         IMAGE=$ECR_REGISTRY/$SERVICE:$TAG
+
+        # Create the uat namespace if it doesn't exist
+        kubectl get ns uat || kubectl create namespace uat
+
+        # Copy deployment from qa to uat if it doesn't exist
+        if ! kubectl get deployment $SERVICE -n uat; then
+          echo "🔄 Copying $SERVICE deployment from qa to uat..."
+          kubectl get deployment $SERVICE -n qa -o yaml | \
+            sed 's/namespace: qa/namespace: uat/' | kubectl apply -f -
+        fi
 
         echo "📦 Updating $SERVICE deployment in UAT to image: $IMAGE"
         kubectl set image deployment/$SERVICE $SERVICE=$IMAGE -n uat
