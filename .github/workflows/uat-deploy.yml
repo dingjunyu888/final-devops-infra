@@ -74,7 +74,13 @@ jobs:
         docker build -t $IMAGE --platform linux/amd64 $CONTEXT
         docker push $IMAGE
 
-    - name: Simulate UAT Deployment to EC2
+    - name: Deploy image to EKS (UAT namespace)
       run: |
-        echo "🚀 Simulating deployment of $SERVICE to UAT environment with tag $TAG"
-        echo "✅ UAT deployment complete"
+        aws eks update-kubeconfig --region $AWS_REGION --name final-devops-cluster
+
+        SERVICE=${{ steps.parse.outputs.service }}
+        TAG=${{ steps.parse.outputs.tag }}
+        IMAGE=$ECR_REGISTRY/$SERVICE:$TAG
+
+        echo "📦 Updating $SERVICE deployment in UAT to image: $IMAGE"
+        kubectl set image deployment/$SERVICE $SERVICE=$IMAGE -n uat
