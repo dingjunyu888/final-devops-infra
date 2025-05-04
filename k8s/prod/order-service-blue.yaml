@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service-blue
+  namespace: prod
+  labels:
+    app: order-service
+    version: blue
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-service
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: order-service
+        version: blue
+    spec:
+      containers:
+        - name: order-service
+          image: 949882743811.dkr.ecr.us-east-1.amazonaws.com/order-service:ga-v1.0.0
+          ports:
+            - containerPort: 3003
+          env:
+            - name: DB_HOST
+              value: ecommerce-db.cu7l9seahjyg.us-east-1.rds.amazonaws.com
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: order-db-secret
+                  key: password

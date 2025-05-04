@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend-green
+  namespace: prod
+  labels:
+    app: frontend
+    version: green
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+      version: green
+  template:
+    metadata:
+      labels:
+        app: frontend
+        version: green
+    spec:
+      containers:
+        - name: frontend
+          image: 949882743811.dkr.ecr.us-east-1.amazonaws.com/frontend:ga-v1.0.0
+          ports:
+            - containerPort: 5173
