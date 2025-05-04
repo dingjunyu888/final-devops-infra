@@ -11,25 +11,23 @@ jobs:
     env:
       ECR_REGISTRY: 949882743811.dkr.ecr.us-east-1.amazonaws.com
       AWS_REGION: us-east-1
-      CLUSTER_NAME: final-devops-cluster
-      NAMESPACE: prod
 
     steps:
-    - name: Checkout Infra Repo
+    - name: Checkout infra repo
       uses: actions/checkout@v3
 
-    - name: Checkout Source Repo
+    - name: Checkout source repo
       uses: actions/checkout@v3
       with:
         repository: dingjunyu888/final-devops-project
         token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
         path: source
 
-    - name: Parse Release Title
+    - name: Parse release title
       id: parse
       run: |
         TITLE="${{ github.event.client_payload.release_title }}"
-        echo "Release Title: $TITLE"
+        echo "Release title: $TITLE"
 
         if [[ "$TITLE" =~ ^user-service-ga-.*$ ]]; then
           echo "service=user-service" >> $GITHUB_OUTPUT
@@ -48,11 +46,12 @@ jobs:
           echo "context=source/frontend" >> $GITHUB_OUTPUT
           TAG=$(echo "$TITLE" | cut -d'-' -f2-)
         else
-          echo "❌ Unknown or missing service in release title."
+          echo "❌ Unknown or invalid service tag"
           exit 78
         fi
 
         echo "tag=$TAG" >> $GITHUB_OUTPUT
+        echo "Extracted tag: $TAG"
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
@@ -67,44 +66,60 @@ jobs:
         aws ecr get-login-password --region $AWS_REGION | \
         docker login --username AWS --password-stdin $ECR_REGISTRY
 
-    - name: Build and Push Docker Image
+    - name: Build and push Docker image for PROD
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
         CONTEXT=${{ steps.parse.outputs.context }}
         TAG=${{ steps.parse.outputs.tag }}
         IMAGE=$ECR_REGISTRY/$SERVICE:$TAG
 
-        echo "📦 Building $SERVICE with tag $TAG"
+        echo "📦 Building and pushing $IMAGE"
         docker build -t $IMAGE --platform linux/amd64 $CONTEXT
         docker push $IMAGE
 
-    - name: Update Kubeconfig
-      run: aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --region $AWS_REGION --name final-devops-cluster
 
-    - name: Deploy to Green
+    - name: Determine active color in PROD
+      id: active-color
+      run: |
+        SERVICE=${{ steps.parse.outputs.service }}
+        ACTIVE_COLOR=$(kubectl get svc $SERVICE -n prod -o jsonpath='{.spec.selector.version}')
+        echo "🎨 Active color is: $ACTIVE_COLOR"
+
+        if [[ "$ACTIVE_COLOR" == "blue" ]]; then
+          NEXT_COLOR="green"
+        else
+          NEXT_COLOR="blue"
+        fi
+
+        echo "next_color=$NEXT_COLOR" >> $GITHUB_OUTPUT
+        echo "💡 Will deploy to: $NEXT_COLOR"
+
+    - name: Update Deployment image for ${{ steps.parse.outputs.service }}
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
         TAG=${{ steps.parse.outputs.tag }}
+        COLOR=${{ steps.active-color.outputs.next_color }}
         IMAGE=$ECR_REGISTRY/$SERVICE:$TAG
 
-        echo "🟢 Deploying green version of $SERVICE with $IMAGE"
-        kubectl set image deployment/${SERVICE}-green $SERVICE=$IMAGE -n $NAMESPACE
+        echo "🚀 Updating deployment: $SERVICE-$COLOR with image: $IMAGE"
+        kubectl set image deployment/$SERVICE-$COLOR $SERVICE=$IMAGE -n prod
 
-    - name: Wait for Green to be Ready
+    - name: Wait for deployment rollout
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
-        echo "⏳ Waiting for ${SERVICE}-green pods to be ready..."
-        kubectl rollout status deployment/${SERVICE}-green -n $NAMESPACE
+        COLOR=${{ steps.active-color.outputs.next_color }}
 
-    - name: Switch LoadBalancer to Green
+        echo "⏳ Waiting for deployment rollout..."
+        kubectl rollout status deployment/$SERVICE-$COLOR -n prod
+
+    - name: Switch service selector to ${{ steps.active-color.outputs.next_color }}
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
-        echo "🔁 Switching service to point to green deployment"
-        kubectl patch service $SERVICE -n $NAMESPACE \
-          -p '{"spec":{"selector":{"app":"'"$SERVICE"'","version":"green"}}}'
+        COLOR=${{ steps.active-color.outputs.next_color }}
+        echo "🔁 Switching $SERVICE service to point to version=$COLOR"
 
-    - name: 🧼 Cleanup Blue
-      run: |
-        SERVICE=${{ steps.parse.outputs.service }}
-        echo "🗑️ Scaling down blue deployment"
-        kubectl scale deployment/${SERVICE}-blue --replicas=0 -n $NAMESPACE
+        kubectl patch svc $SERVICE -n prod \
+          -p "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"version\": \"$COLOR\"}}}"
