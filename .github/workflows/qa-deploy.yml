@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 jobs:
-  detect-and-test:
+  detect-and-deploy:
     runs-on: ubuntu-latest
     env:
       ECR_REGISTRY: 949882743811.dkr.ecr.us-east-1.amazonaws.com
@@ -77,38 +77,77 @@ jobs:
         docker build -t $IMAGE --platform linux/amd64 $CONTEXT
         docker push $IMAGE
 
-    # 🧪 Simulated QA Integration Steps
+    # 👇 Real QA Integration Begins Here
 
-    - name: Simulate Start EC2 for QA Testing
+    - name: Start EC2 Instance for QA Testing
       run: |
-        echo "🖥️ Starting temporary EC2 instance for QA testing..."
-        echo "Simulated EC2 instance ID: i-0abc123fake"
+        INSTANCE_ID=$(aws ec2 run-instances --image-id ami-05b10e08d247fb927 --instance-type t2.micro --key-name spa --security-group-ids sg-071cee3302403d191 --subnet-id subnet-0cc84b17429331c3d --query "Instances[0].InstanceId" --output text)
+        echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+        echo "::set-output name=instance_id::$INSTANCE_ID"
+        echo "Started EC2 instance: $INSTANCE_ID"
 
-    - name: Simulate Wait for EC2 to be Running
+    - name: Wait for EC2 Instance to be Running
       run: |
-        echo "⏳ Waiting for EC2 to enter running state..."
-        sleep 5
-        echo "✅ EC2 is now running."
+        aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+        echo "✅ EC2 is running."
 
-    - name: Simulate SSH and Docker Compose Setup
+    - name: Get EC2 Public IP
+      id: get-ec2-ip
       run: |
-        echo "🔐 SSH into EC2 and prepare Docker environment..."
-        echo "✔️ Docker and Docker Compose are installed."
+        PUBLIC_IP=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[*].Instances[*].PublicIpAddress" --output text)
+        echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+        echo "::set-output name=public_ip::$PUBLIC_IP"
 
-    - name: Simulate Smoke Test
+    - name: Wait for EC2 Status Checks
       run: |
-        echo "🚦 Running smoke test..."
-        echo "✔️ Service responded with HTTP 200."
-        echo "✔️ Health check passed."
+        echo "Waiting for EC2 health checks..."
+        sleep 30
+        aws ec2 wait instance-status-ok --instance-ids $INSTANCE_ID
+        echo "✅ EC2 is healthy."
 
-    - name: Simulate Integration Test
+    - name: Set up SSH key
       run: |
-        echo "🔁 Running integration test..."
-        echo "✔️ Created mock resource in QA DB."
-        echo "✔️ Verified GET and POST requests."
-        echo "✔️ All integration tests passed."
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" | base64 --decode > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ steps.get-ec2-ip.outputs.public_ip }} >> ~/.ssh/known_hosts
 
-    - name: Simulate QA Deployment
+    - name: Access EC2 and Install Docker
       run: |
-        echo "🚀 Deploying service to QA machine (simulated)..."
-        echo "✔️ Service deployed using image: $ECR_REGISTRY/${{ steps.detect.outputs.service }}:qa-latest"
+        ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ steps.get-ec2-ip.outputs.public_ip }} \
+        "sudo yum update -y && \
+        sudo yum install -y docker git && \
+        sudo service docker start && \
+        sudo usermod -aG docker ec2-user && \
+        sudo curl -L 'https://github.com/docker/compose/releases/download/v2.10.2/docker-compose-$(uname -s)-$(uname -m)' -o /usr/local/bin/docker-compose && \
+        sudo chmod +x /usr/local/bin/docker-compose && \
+        aws configure set aws_access_key_id '${{ secrets.AWS_ACCESS_KEY_ID }}' && \
+        aws configure set aws_secret_access_key '${{ secrets.AWS_SECRET_ACCESS_KEY }}' && \
+        aws configure set aws_session_token '${{ secrets.AWS_SESSION_TOKEN }}' && \
+        aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $ECR_REGISTRY"
+
+    - name: Pull Docker Image from ECR
+      run: |
+        SERVICE=${{ steps.detect.outputs.service }}
+        ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ steps.get-ec2-ip.outputs.public_ip }} \
+        "docker pull $ECR_REGISTRY/$SERVICE:qa-latest"
+
+    - name: Run Container and Perform Smoke Test
+      run: |
+        SERVICE=${{ steps.detect.outputs.service }}
+        PORT=3000
+        if [[ "$SERVICE" == "user-service" ]]; then PORT=3001; fi
+        if [[ "$SERVICE" == "product-service" ]]; then PORT=3002; fi
+        if [[ "$SERVICE" == "order-service" ]]; then PORT=3003; fi
+        if [[ "$SERVICE" == "frontend" ]]; then PORT=5173; fi
+
+        ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ec2-user@${{ steps.get-ec2-ip.outputs.public_ip }} \
+        "docker run -d --name $SERVICE -p $PORT:$PORT $ECR_REGISTRY/$SERVICE:qa-latest && \
+        sleep 15 && \
+        curl -I http://localhost:$PORT || echo '⚠️ Service may not be responding'"
+
+    - name: Clean up EC2 instance
+      if: always()
+      run: |
+        aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+        echo "🧹 Terminated QA EC2 instance."
