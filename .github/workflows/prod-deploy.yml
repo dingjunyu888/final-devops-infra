@@ -1,4 +1,4 @@
-name: PROD Deploy (Blue/Green)
+name: PROD Deploy
 
 on:
   repository_dispatch:
@@ -46,12 +46,12 @@ jobs:
           echo "context=source/frontend" >> $GITHUB_OUTPUT
           TAG=$(echo "$TITLE" | cut -d'-' -f2-)
         else
-          echo "❌ Unknown or invalid service tag"
+          echo "❌ Unknown or missing service in release title."
           exit 78
         fi
 
-        echo "tag=$TAG" >> $GITHUB_OUTPUT
         echo "Extracted tag: $TAG"
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
@@ -66,7 +66,7 @@ jobs:
         aws ecr get-login-password --region $AWS_REGION | \
         docker login --username AWS --password-stdin $ECR_REGISTRY
 
-    - name: Build and push Docker image for PROD
+    - name: Build and push Docker image
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
         CONTEXT=${{ steps.parse.outputs.context }}
@@ -81,45 +81,55 @@ jobs:
       run: |
         aws eks update-kubeconfig --region $AWS_REGION --name final-devops-cluster
 
-    - name: Determine active color in PROD
-      id: active-color
+    - name: Detect current live color
+      id: color
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
-        ACTIVE_COLOR=$(kubectl get svc $SERVICE -n prod -o jsonpath='{.spec.selector.version}')
-        echo "🎨 Active color is: $ACTIVE_COLOR"
 
-        if [[ "$ACTIVE_COLOR" == "blue" ]]; then
-          NEXT_COLOR="green"
+        CURRENT_SELECTOR=$(kubectl get svc $SERVICE -n prod -o jsonpath='{.spec.selector.version}')
+        if [ "$CURRENT_SELECTOR" = "blue" ]; then
+          NEW_COLOR="green"
         else
-          NEXT_COLOR="blue"
+          NEW_COLOR="blue"
         fi
+        echo "🔁 Switching $SERVICE to $NEW_COLOR"
+        echo "new_color=$NEW_COLOR" >> $GITHUB_OUTPUT
 
-        echo "next_color=$NEXT_COLOR" >> $GITHUB_OUTPUT
-        echo "💡 Will deploy to: $NEXT_COLOR"
-
-    - name: Update Deployment image for ${{ steps.parse.outputs.service }}
+    - name: Apply new deployment
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
         TAG=${{ steps.parse.outputs.tag }}
-        COLOR=${{ steps.active-color.outputs.next_color }}
+        NEW_COLOR=${{ steps.color.outputs.new_color }}
         IMAGE=$ECR_REGISTRY/$SERVICE:$TAG
 
-        echo "🚀 Updating deployment: $SERVICE-$COLOR with image: $IMAGE"
-        kubectl set image deployment/$SERVICE-$COLOR $SERVICE=$IMAGE -n prod
+        echo "📦 Deploying $SERVICE-$NEW_COLOR with image: $IMAGE"
 
-    - name: Wait for deployment rollout
+        kubectl set image deployment/$SERVICE-$NEW_COLOR $SERVICE=$IMAGE -n prod
+
+    - name: Wait for rollout to complete
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
-        COLOR=${{ steps.active-color.outputs.next_color }}
+        NEW_COLOR=${{ steps.color.outputs.new_color }}
+        echo "⏳ Waiting for $SERVICE-$NEW_COLOR to roll out..."
+        kubectl rollout status deployment/$SERVICE-$NEW_COLOR -n prod
 
-        echo "⏳ Waiting for deployment rollout..."
-        kubectl rollout status deployment/$SERVICE-$COLOR -n prod
-
-    - name: Switch service selector to ${{ steps.active-color.outputs.next_color }}
+    - name: Update service selector
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
-        COLOR=${{ steps.active-color.outputs.next_color }}
-        echo "🔁 Switching $SERVICE service to point to version=$COLOR"
+        NEW_COLOR=${{ steps.color.outputs.new_color }}
 
-        kubectl patch svc $SERVICE -n prod \
-          -p "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"version\": \"$COLOR\"}}}"
+        echo "🔀 Updating service selector to $NEW_COLOR"
+        kubectl patch service $SERVICE -n prod -p \
+          "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"version\": \"$NEW_COLOR\"}}}"
+
+    - name: Cleanup old deployment
+      run: |
+        SERVICE=${{ steps.parse.outputs.service }}
+        CURRENT_COLOR=${{ steps.color.outputs.new_color }}
+        OLD_COLOR="blue"
+        if [ "$CURRENT_COLOR" = "blue" ]; then
+          OLD_COLOR="green"
+        fi
+
+        echo "🧹 Deleting old deployment: $SERVICE-$OLD_COLOR"
+        kubectl delete deployment $SERVICE-$OLD_COLOR -n prod || true
