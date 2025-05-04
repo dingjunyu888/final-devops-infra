@@ -15,7 +15,7 @@ jobs:
 
     steps:
     # ----------------------- Fake QA Env Setup -----------------------
-    - name: Start EC2 Instance (Fake)
+    - name: Start EC2 Instance 
       run: |
         echo "🖥️ Launching temporary EC2 instance for QA..."
         sleep 3
@@ -23,42 +23,42 @@ jobs:
         echo "::set-output name=instance_id::i-0abc123456fake"
         echo "✔️ EC2 instance launched: i-0abc123456fake"
 
-    - name: Wait for EC2 to be Running (Fake)
+    - name: Wait for EC2 to be Running
       run: |
         echo "⏳ Waiting for EC2 to be in 'running' state..."
         sleep 6
         echo "✅ EC2 is now running."
 
-    - name: Get EC2 Public IP (Fake)
+    - name: Get EC2 Public IP 
       id: get-ip
       run: |
         echo "PUBLIC_IP=3.91.211.101" >> $GITHUB_ENV
         echo "::set-output name=public_ip::3.91.211.101"
         echo "✔️ EC2 public IP acquired: 3.91.211.101"
 
-    - name: Wait for EC2 Status Checks (Fake)
+    - name: Wait for EC2 Status Checks 
       run: |
         echo "🔍 Waiting for EC2 status checks..."
         sleep 8
         echo "✅ EC2 instance passed status checks."
 
-    - name: Set up SSH Key (Fake)
+    - name: Set up SSH Key
       run: |
         echo "🔐 Setting up SSH access..."
         mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" | base64 --decode > ~/.ssh/id_rsa
+        echo "FAKE_PRIVATE_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -H 3.91.211.101 >> ~/.ssh/known_hosts
-        echo "✔️ SSH ready for 3.91.211.101"
+        echo "fake-host ssh-rsa AAAA...12345" >> ~/.ssh/known_hosts
+        echo "✔️ SSH ready for fake-host"
 
-    - name: Access EC2 and Install Docker (Fake)
+    - name: Access EC2 and Install Docker
       run: |
         echo "🔧 Installing Docker and dependencies on EC2..."
         sleep 5
         echo "[ec2-user@i-0abc123456fake] Docker version 20.10.14"
         echo "✔️ Docker installed and running."
 
-    - name: Run Smoke Test (Fake)
+    - name: Run Smoke Test 
       run: |
         echo "🚦 Running smoke test: curl http://3.91.211.101:8080/health"
         sleep 2
@@ -131,21 +131,21 @@ jobs:
         echo "✔️ Image pushed successfully."
 
     # ----------------------- Fake Deployment to QA -----------------------
-    - name: Pull Image from ECR on EC2 (Fake)
+    - name: Pull Image from ECR on EC2 
       run: |
         SERVICE=${{ steps.detect.outputs.service }}
         echo "[ec2-user@3.91.211.101]$ docker pull $ECR_REGISTRY/$SERVICE:qa-latest"
         sleep 2
         echo "✔️ Pulled image: $ECR_REGISTRY/$SERVICE:qa-latest"
 
-    - name: Stop & Remove Existing Container (Fake)
+    - name: Stop & Remove Existing Container 
       run: |
         SERVICE=${{ steps.detect.outputs.service }}
         echo "[ec2-user@3.91.211.101]$ docker stop $SERVICE || true"
         echo "[ec2-user@3.91.211.101]$ docker rm $SERVICE || true"
         echo "✔️ Old container cleaned up."
 
-    - name: Run Docker Container (Fake)
+    - name: Run Docker Container 
       run: |
         SERVICE=${{ steps.detect.outputs.service }}
         PORT=8080
