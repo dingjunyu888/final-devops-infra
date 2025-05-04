@@ -50,7 +50,6 @@ jobs:
           exit 78
         fi
 
-        echo "Extracted tag: $TAG"
         echo "tag=$TAG" >> $GITHUB_OUTPUT
 
     - name: Configure AWS credentials
@@ -95,7 +94,21 @@ jobs:
         echo "🔁 Switching $SERVICE to $NEW_COLOR"
         echo "new_color=$NEW_COLOR" >> $GITHUB_OUTPUT
 
-    - name: Apply new deployment
+    - name: Apply deployment if missing
+      run: |
+        SERVICE=${{ steps.parse.outputs.service }}
+        NEW_COLOR=${{ steps.color.outputs.new_color }}
+        FILE="k8s/prod/$SERVICE-$NEW_COLOR.yaml"
+
+        echo "📄 Checking if $SERVICE-$NEW_COLOR deployment exists..."
+        if ! kubectl get deployment $SERVICE-$NEW_COLOR -n prod >/dev/null 2>&1; then
+          echo "⚠️ Deployment $SERVICE-$NEW_COLOR not found. Applying YAML..."
+          kubectl apply -f $FILE
+        else
+          echo "✅ Deployment already exists."
+        fi
+
+    - name: Set image for new deployment
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
         TAG=${{ steps.parse.outputs.tag }}
@@ -103,31 +116,30 @@ jobs:
         IMAGE=$ECR_REGISTRY/$SERVICE:$TAG
 
         echo "📦 Deploying $SERVICE-$NEW_COLOR with image: $IMAGE"
-
         kubectl set image deployment/$SERVICE-$NEW_COLOR $SERVICE=$IMAGE -n prod
 
     - name: Wait for rollout to complete
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
         NEW_COLOR=${{ steps.color.outputs.new_color }}
-        echo "⏳ Waiting for $SERVICE-$NEW_COLOR to roll out..."
+        echo "⏳ Waiting for $SERVICE-$NEW_COLOR rollout..."
         kubectl rollout status deployment/$SERVICE-$NEW_COLOR -n prod
 
     - name: Update service selector
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
         NEW_COLOR=${{ steps.color.outputs.new_color }}
-
-        echo "🔀 Updating service selector to $NEW_COLOR"
+        echo "🔀 Updating selector to $NEW_COLOR"
         kubectl patch service $SERVICE -n prod -p \
           "{\"spec\": {\"selector\": {\"app\": \"$SERVICE\", \"version\": \"$NEW_COLOR\"}}}"
 
-    - name: Cleanup old deployment
+    - name: Cleanup old deployment only if rollout succeeded
+      if: success()
       run: |
         SERVICE=${{ steps.parse.outputs.service }}
-        CURRENT_COLOR=${{ steps.color.outputs.new_color }}
+        NEW_COLOR=${{ steps.color.outputs.new_color }}
         OLD_COLOR="blue"
-        if [ "$CURRENT_COLOR" = "blue" ]; then
+        if [ "$NEW_COLOR" = "blue" ]; then
           OLD_COLOR="green"
         fi
 
